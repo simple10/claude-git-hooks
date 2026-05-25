@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Global pre-commit. Two checks:
+#   1. The commit's resolved author email MUST equal `git config user.email`.
+#      Catches per-command overrides: `git -c user.email=… commit`,
+#      `git commit --author=…`, GIT_AUTHOR_EMAIL=…, EMAIL=…
+#      Zero config — trusts whatever identity the repo is configured for.
+#   2. Staged ADDED lines must not match `hooks.bannedEmailsRegex` (if set).
+# Chains to per-repo .git/hooks/pre-commit so project hooks still run.
+set -euo pipefail
+
+# Read stored git config, bypassing -c / GIT_CONFIG_* propagation. Without
+# this, `git -c user.email=X commit` propagates the override to the hook's
+# `git config --get user.email` call (via GIT_CONFIG_PARAMETERS / _COUNT /
+# _KEY_n / _VALUE_n env vars), so the comparison would be override-vs-
+# override (always equal) and the leak would slip through. Subshell scopes
+# the unsets so they don't bleed into the rest of the script.
+git_config_stored() {
+  (
+    for v in $(env | sed -n 's/^\(GIT_CONFIG_[^=]*\)=.*/\1/p'); do
+      unset "$v"
+    done
+    git config "$@" 2>/dev/null || true
+  )
+}
+
+# 1. author identity --------------------------------------------------------
+configured="$(git_config_stored --get user.email)"
+if [ -z "$configured" ]; then
+  printf '\033[31m✗ pre-commit (global): refusing commit — git config user.email is unset\033[0m\n' >&2
+  echo "  Set it: git config --global user.email '<your-email>'  (or per-repo: --local)" >&2
+  exit 1
+fi
+ident="$(git var GIT_AUTHOR_IDENT 2>/dev/null || true)"
+actual="$(printf '%s' "$ident" | sed -nE 's/.*<([^>]+)>.*/\1/p')"
+if [ "$actual" != "$configured" ]; then
+  printf '\033[31m✗ pre-commit (global): refusing commit — author email differs from configured user.email\033[0m\n' >&2
+  echo "  author email:     $actual" >&2
+  echo "  configured (git): $configured" >&2
+  echo "  Resolved via:     $ident" >&2
+  echo "  Likely cause: command-line override (-c user.email=… / --author=… / EMAIL=… / GIT_AUTHOR_EMAIL=…)" >&2
+  echo "  Bypass once (only if you really mean it): git commit --no-verify" >&2
+  exit 1
+fi
+
+# 2. banned content (added lines only) --------------------------------------
+BANNED_RE="$(git config --get hooks.bannedEmailsRegex 2>/dev/null || true)"
+if [ -n "$BANNED_RE" ]; then
+  matches="$(git diff --cached --no-color -U0 --diff-filter=ACMR 2>/dev/null \
+    | awk -v re="$BANNED_RE" '
+        /^diff --git/ {
+          n = split($0, p, " "); file = p[n]; sub(/^b\//, "", file); next
+        }
+        /^(---|\+\+\+|@@)/ { next }
+        /^\+/ {
+          line = substr($0, 2)
+          if (line ~ re) printf "    %s\n      + %s\n", file, line
+        }')"
+  if [ -n "$matches" ]; then
+    printf '\033[31m✗ pre-commit (global): staged changes contain a banned pattern\033[0m\n' >&2
+    printf '  pattern (hooks.bannedEmailsRegex):\n    %s\n' "$BANNED_RE" >&2
+    printf '  matches in ADDED lines:\n%s\n' "$matches" >&2
+    echo "  Adjust pattern: git config --global hooks.bannedEmailsRegex '<regex>'" >&2
+    echo "  Disable scan:   git config --global --unset hooks.bannedEmailsRegex" >&2
+    echo "  Bypass once:    git commit --no-verify  (only if you really mean it)" >&2
+    exit 1
+  fi
+fi
+
+# 3. chain to per-repo ------------------------------------------------------
+gitdir="$(git rev-parse --git-dir 2>/dev/null || true)"
+if [ -n "$gitdir" ] && [ -x "$gitdir/hooks/pre-commit" ] \
+   && [ "$(realpath "$gitdir/hooks/pre-commit")" != "$(realpath "$0")" ]; then
+  exec "$gitdir/hooks/pre-commit" "$@"
+fi

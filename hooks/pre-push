@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Global pre-push: name-gated email check.
+# For each commit in the push range, if author.name == git config user.name,
+# then author.email MUST == git config user.email. Otherwise skip (it's a
+# contributor commit, not yours). Catches leaks from other machines /
+# cherry-picks / --no-verify commits that bypassed pre-commit, without
+# false-positiving on legitimate merged contributor commits.
+set -euo pipefail
+
+# Read stored git config, bypassing -c / GIT_CONFIG_* propagation. Defends
+# the exotic case of `git -c user.email=X push` (would otherwise compare
+# override-vs-override and pass). See pre-commit for the full explanation.
+git_config_stored() {
+  (
+    for v in $(env | sed -n 's/^\(GIT_CONFIG_[^=]*\)=.*/\1/p'); do
+      unset "$v"
+    done
+    git config "$@" 2>/dev/null || true
+  )
+}
+
+configured_name="$(git_config_stored --get user.name)"
+configured_email="$(git_config_stored --get user.email)"
+if [ -z "$configured_name" ] || [ -z "$configured_email" ]; then
+  printf '\033[31m✗ pre-push (global): refusing push — git config user.name and/or user.email is unset\033[0m\n' >&2
+  echo "  Set them globally:" >&2
+  echo "    git config --global user.name  '<your-name>'" >&2
+  echo "    git config --global user.email '<your-email>'" >&2
+  exit 1
+fi
+
+violations=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "0000000000000000000000000000000000000000" ] && continue
+  if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+    # New branch on remote — bound the scan by other remote refs. If none
+    # exist (fresh remote), this scans the full reachable history; that's
+    # intentionally cautious (false positives noisy, missing a leak isn't).
+    range_args=("$local_sha" "--not" "--remotes")
+  else
+    range_args=("${remote_sha}..${local_sha}")
+  fi
+  # TAB-delimited output. Tab can't appear in hash/name/email/subject, so
+  # awk -F'\t' parses unambiguously. (Avoid multi-char FS like " | " — awk
+  # treats it as a REGEX, so `|` becomes alternation and splits go wrong.)
+  bad="$(git log "${range_args[@]}" --format='%h%x09%an%x09%ae%x09%s' 2>/dev/null \
+    | awk -F'\t' -v name="$configured_name" -v email="$configured_email" '
+        # name match acts as "this commit is CLAIMING to be you" — then
+        # the email had better also match.
+        $2 == name && $3 != email {
+          printf "    %s  author=%s <%s>  %s\n", $1, $2, $3, $4
+        }')"
+  if [ -n "$bad" ]; then
+    printf '\033[31m✗ pre-push (global): commits authored under your name but with the wrong email being pushed to %s\033[0m\n' "$remote_ref" >&2
+    printf '%s\n' "$bad" | head -20 >&2
+    violations=$((violations + 1))
+  fi
+done
+if [ "$violations" -gt 0 ]; then
+  echo >&2
+  echo "  Configured identity:  $configured_name <$configured_email>" >&2
+  echo "  Bypass once (NOT for public repos): git push --no-verify" >&2
+  exit 1
+fi
+
+gitdir="$(git rev-parse --git-dir 2>/dev/null || true)"
+if [ -n "$gitdir" ] && [ -x "$gitdir/hooks/pre-push" ] \
+   && [ "$(realpath "$gitdir/hooks/pre-push")" != "$(realpath "$0")" ]; then
+  exec "$gitdir/hooks/pre-push" "$@"
+fi
