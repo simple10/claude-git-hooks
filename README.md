@@ -51,22 +51,24 @@ dependency. Tested on macOS; should work on Linux with stock `git`/`awk`/`sed`.
 
 Paste this prompt into a Claude Code session (any directory):
 
-> Install the global git hooks from `https://github.com/simple10/claude-git-hooks`. Specifically:
->
-> 1. Clone the repo to `~/.config/claude-git-hooks` (or `git pull` if it's already there).
-> 2. Verify my git identity is set: run `git config --global --get user.name` and `git config --global --get user.email`. If either is empty, stop and ask me — the hooks refuse to run without a configured identity. (If I'm using a GitHub noreply alias, that's `<id>+<username>@users.noreply.github.com`; otherwise whatever email I want every commit to use.)
-> 3. Symlink (don't copy — symlinks let `git pull` in the repo dir update the installed hooks automatically):
->    - `~/.config/claude-git-hooks/hooks/pre-commit` → `~/.config/git/hooks/pre-commit`
->    - `~/.config/claude-git-hooks/hooks/pre-push` → `~/.config/git/hooks/pre-push`
->    - `~/.config/claude-git-hooks/heal-git-hooks.sh` → `~/.claude/heal-git-hooks.sh`
-> 4. Set `git config --global core.hooksPath ~/.config/git/hooks`.
-> 5. Ask me whether I want to set `hooks.bannedEmailsRegex` (optional content-scan that refuses commits whose staged ADDED lines contain a given regex — useful for catching personal/work email addresses, internal hostnames, etc. ending up in code). If yes, ask for the regex and set it with `git config --global hooks.bannedEmailsRegex '<regex>'`. Default: leave unset (no content scan).
-> 6. Add a `SessionStart` hook to `~/.claude/settings.json` under `hooks.SessionStart` that runs `bash ~/.claude/heal-git-hooks.sh` with `timeout: 5`. MERGE with the existing `hooks` block if any — don't replace.
-> 7. Verify the install end-to-end:
->    - Confirm `git config --global --get core.hooksPath` prints the hooks dir.
->    - Confirm `~/.config/git/hooks/pre-commit` and `pre-push` are executable.
->    - Confirm `git var GIT_AUTHOR_IDENT` resolves to my configured `<name> <email>` (no env-var override leaking in from somewhere).
->    - Pipe-test pre-push against HEAD of the current repo (synthesize the stdin git sends and run the hook directly) — should exit 0.
+```markdown
+Install the global git hooks from https://github.com/simple10/claude-git-hooks. Specifically:
+
+1. Clone the repo to ~/.config/claude-git-hooks (or `git pull` if it's already there).
+2. Verify my git identity is set: run `git config --global --get user.name` and `git config --global --get user.email`. If either is empty, stop and ask me — the hooks refuse to run without a configured identity. (If I'm using a GitHub noreply alias, that's <id>+<username>@users.noreply.github.com; otherwise whatever email I want every commit to use.)
+3. Symlink (don't copy — symlinks let `git pull` in the repo dir update the installed hooks automatically):
+   - ~/.config/claude-git-hooks/hooks/pre-commit → ~/.config/git/hooks/pre-commit
+   - ~/.config/claude-git-hooks/hooks/pre-push   → ~/.config/git/hooks/pre-push
+   - ~/.config/claude-git-hooks/heal-git-hooks.sh → ~/.claude/heal-git-hooks.sh
+4. Set `git config --global core.hooksPath ~/.config/git/hooks`.
+5. Ask me whether I want to set `hooks.bannedEmailsRegex` (optional content-scan that refuses commits whose staged ADDED lines contain a given regex — useful for catching personal/work email addresses, internal hostnames, etc. ending up in code). If yes, ask for the regex and set it with `git config --global hooks.bannedEmailsRegex '<regex>'`. Default: leave unset (no content scan).
+6. Add a SessionStart hook to ~/.claude/settings.json under `hooks.SessionStart` that runs `bash ~/.claude/heal-git-hooks.sh` with `timeout: 5`. MERGE with the existing `hooks` block if any — don't replace.
+7. Verify the install end-to-end:
+   - Confirm `git config --global --get core.hooksPath` prints the hooks dir.
+   - Confirm ~/.config/git/hooks/pre-commit and pre-push are executable.
+   - Confirm `git var GIT_AUTHOR_IDENT` resolves to my configured <name> <email> (no env-var override leaking in from somewhere).
+   - Pipe-test pre-push against HEAD of the current repo (synthesize the stdin git sends and run the hook directly) — should exit 0.
+```
 
 That's the whole install. The prompt is intentionally explicit so Claude
 doesn't need to guess — every step has acceptance criteria. Re-pasting the
