@@ -19,7 +19,7 @@ Install the global git hooks from https://github.com/simple10/claude-git-hooks. 
    - ~/.config/claude-git-hooks/hooks/pre-push   → ~/.config/git/hooks/pre-push
    - ~/.config/claude-git-hooks/heal-git-hooks.sh → ~/.claude/heal-git-hooks.sh
 4. Set `git config --global core.hooksPath ~/.config/git/hooks`.
-5. Ask me whether I want to set `hooks.bannedEmailsRegex` (optional content-scan that refuses commits whose staged ADDED lines contain a given regex — useful for catching personal/work email addresses, internal hostnames, etc. ending up in code). If yes, ask for the regex and set it with `git config --global hooks.bannedEmailsRegex '<regex>'`. Default: leave unset (no content scan).
+5. Ask me whether I want to set `hooks.bannedEmailsRegex` (optional content-scan that refuses commits whose staged ADDED lines contain a given regex — useful for catching personal/work email addresses, internal hostnames, etc. ending up in code). If yes, ask for the regex and set it with `git config --global hooks.bannedEmailsRegex '<regex>'`. The regex is awk ERE: write single-backslash escapes like `\.` — do NOT double them as you would inside JSON. Default: leave unset (no content scan).
 6. Add a SessionStart hook to ~/.claude/settings.json under `hooks.SessionStart` that runs `bash ~/.claude/heal-git-hooks.sh` with `timeout: 5`. MERGE with the existing `hooks` block if any — don't replace.
 7. Verify the install end-to-end:
    - Confirm `git config --global --get core.hooksPath` prints the hooks dir.
@@ -89,8 +89,18 @@ or overridden per-repo with `git config --local`.
 |---|---|---|
 | `user.email` | (set by you) | The hooks' source of truth for "your" email. Any commit whose author email differs from this is refused. |
 | `user.name` | (set by you) | Used by pre-push to identify "commits that claim to be you" (name match) vs contributor commits (name doesn't match). |
-| `hooks.bannedEmailsRegex` | unset (scan disabled) | If set, pre-commit refuses any commit whose staged ADDED lines match this regex. Pre-existing content in unmodified parts of files is ignored. Example: `[A-Za-z0-9._%+-]+@(myorg\.com\|me\.com)`. |
+| `hooks.bannedEmailsRegex` | unset (scan disabled) | If set, pre-commit refuses any commit whose staged ADDED lines match this regex. Pre-existing content in unmodified parts of files is ignored. Plain awk ERE with single-backslash escapes — see example below. |
 | `core.hooksPath` | `~/.config/git/hooks` (set by installer) | Where git looks for hooks. **If a repo's local config sets this**, the global hooks STOP firing for that repo — see Caveats. |
+
+Example content-scan pattern (catches two email domains):
+
+```bash
+git config --global hooks.bannedEmailsRegex '[A-Za-z0-9._%+-]+@(myorg\.com|me\.com)'
+```
+
+`git config` stores and returns the value verbatim, and the hook passes it to
+`awk` without any escape processing, so write it exactly as you would any
+extended regex: `\.` for a literal dot, no doubling.
 
 **Switching identities per-repo just works.** If you commit as
 `work@employer.com` in work repos and `you@personal.com` in personal ones,
@@ -159,8 +169,14 @@ Symlinks pick up the new content immediately — no reinstall step.
   them). For high-assurance secret scanning use `gitleaks` or `git-secrets`
   alongside.
 - **`hooks.bannedEmailsRegex` is interpreted by `awk`'s ERE engine.** No
-  Perl-style features (lookaheads, etc.). Test your regex with `echo
-  'sample' | awk "/$YOUR_REGEX/"` before relying on it.
+  Perl-style features (lookaheads, etc.). Test it the same way the hook runs
+  it — via `ENVIRON`, not `-v` (which would rewrite `\.` to `.`):
+
+  ```bash
+  RE='[A-Za-z0-9._%+-]+@(myorg\.com|me\.com)'
+  printf 'x@myorg.com\nx@myorgXcom\n' | RE="$RE" awk '$0 ~ ENVIRON["RE"]'
+  # should print only the first line, with no awk warning
+  ```
 
 ## Uninstall
 

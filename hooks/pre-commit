@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Global pre-commit. Two checks:
-#   1. The commit's resolved author email MUST equal `git config user.email`.
-#      Catches per-command overrides: `git -c user.email=… commit`,
-#      `git commit --author=…`, GIT_AUTHOR_EMAIL=…, EMAIL=…
+#   1. The commit's resolved author AND committer email MUST equal
+#      `git config user.email`. Catches per-command overrides:
+#      `git -c user.email=… commit`, `git commit --author=…`,
+#      GIT_AUTHOR_EMAIL=…, GIT_COMMITTER_EMAIL=…, EMAIL=…
 #      Zero config — trusts whatever identity the repo is configured for.
 #   2. Staged ADDED lines must not match `hooks.bannedEmailsRegex` (if set).
 # Chains to per-repo .git/hooks/pre-commit so project hooks still run.
@@ -41,12 +42,30 @@ if [ "$actual" != "$configured" ]; then
   echo "  Bypass once (only if you really mean it): git commit --no-verify" >&2
   exit 1
 fi
+# Committer identity too — GIT_COMMITTER_EMAIL=… alone leaks the address into
+# the committer field (visible on GitHub) while leaving the author clean.
+cident="$(git var GIT_COMMITTER_IDENT 2>/dev/null || true)"
+cactual="$(printf '%s' "$cident" | sed -nE 's/.*<([^>]+)>.*/\1/p')"
+if [ "$cactual" != "$configured" ]; then
+  printf '\033[31m✗ pre-commit (global): refusing commit — committer email differs from configured user.email\033[0m\n' >&2
+  echo "  committer email:  $cactual" >&2
+  echo "  configured (git): $configured" >&2
+  echo "  Resolved via:     $cident" >&2
+  echo "  Likely cause: GIT_COMMITTER_EMAIL=… / -c user.email=… override" >&2
+  echo "  Bypass once (only if you really mean it): git commit --no-verify" >&2
+  exit 1
+fi
 
 # 2. banned content (added lines only) --------------------------------------
-BANNED_RE="$(git config --get hooks.bannedEmailsRegex 2>/dev/null || true)"
+# Stored config, not propagated: `git -c hooks.bannedEmailsRegex= commit`
+# must not be able to switch the scan off.
+BANNED_RE="$(git_config_stored --get hooks.bannedEmailsRegex)"
 if [ -n "$BANNED_RE" ]; then
+  # Hand the regex to awk via ENVIRON, not -v: awk processes escape sequences
+  # in -v assignments, so `\.` would silently become `.` (any char).
   matches="$(git diff --cached --no-color -U0 --diff-filter=ACMR 2>/dev/null \
-    | awk -v re="$BANNED_RE" '
+    | BANNED_RE="$BANNED_RE" awk '
+        BEGIN { re = ENVIRON["BANNED_RE"] }
         /^diff --git/ {
           n = split($0, p, " "); file = p[n]; sub(/^b\//, "", file); next
         }
