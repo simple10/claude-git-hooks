@@ -71,6 +71,7 @@ rm -rf ~/.config/claude-git-hooks                  # optional: delete the clone
 ## Things to NOT do
 
 - **Don't add an allowlist regex back to the hooks.** The design is "trust `git config user.email`" — set once with `git config --global` (or `--local` per repo), the hooks enforce it. If someone has multi-identity needs, they use `--local user.email` per-repo; we don't grow a config surface for it. Reference commit `303aeb7` (initial release) for the rationale.
+- **`heal-git-hooks.sh` must resolve the COMMON git dir, not just `--absolute-git-dir`.** In a linked worktree (what `EnterWorktree` creates) `--absolute-git-dir` is `<repo>/.git/worktrees/<name>`, while the override it writes points at `<repo>/.git/hooks`. Comparing against only `<gitdir>/hooks` misses it and the global hooks stay disabled. The script checks both `<gitdir>/hooks` and `<commondir>/hooks`; test from inside a `git worktree add` checkout, not just the main repo.
 - **Don't make `heal-git-hooks.sh` aggressive.** It MUST preserve real per-repo hook systems (`.husky`, `.beads/hooks`, project-specific dirs with actual hook files). Only self-referential (`= <repo>/.git/hooks`) or stale (target dir missing) overrides get unset.
 - **Don't add dependencies.** The point of the project is one bash file per hook with no install ceremony.
 
