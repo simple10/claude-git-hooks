@@ -11,7 +11,9 @@
 # Behavior:
 #   - $CLAUDE_PROJECT_DIR not a git repo  → no-op, exit 0
 #   - no local core.hooksPath             → no-op, exit 0
-#   - local == self-referential default   → unset, print one-line INFO
+#   - local == self-referential default
+#     (<gitdir>/hooks, or the common
+#     .git/hooks from a linked worktree)  → unset, print one-line INFO
 #   - local target doesn't exist (stale)  → unset, print one-line INFO
 #   - local target IS a real per-repo
 #     hook dir (.husky/.beads/hooks/etc.) → leave alone, exit 0
@@ -23,6 +25,15 @@ target="${CLAUDE_PROJECT_DIR:-$PWD}"
 
 # Bail silently if not in a git repo.
 gitdir=$(git -C "$target" rev-parse --absolute-git-dir 2>/dev/null) || exit 0
+# In a linked worktree, --absolute-git-dir is <repo>/.git/worktrees/<name>,
+# but hooks live under (and EnterWorktree writes) the COMMON dir's hooks/,
+# i.e. <repo>/.git/hooks. Resolve it too so the self-ref check sees both.
+# (--git-common-dir may be relative to $target on older git; absolutize.)
+commondir=$(git -C "$target" rev-parse --git-common-dir 2>/dev/null || echo "$gitdir")
+case "$commondir" in
+  /*) ;;
+  *)  commondir="$target/$commondir" ;;
+esac
 
 cur=$(git -C "$target" config --local --get core.hooksPath 2>/dev/null || true)
 [ -z "$cur" ] && exit 0
@@ -32,17 +43,20 @@ case "$cur" in
   /*) abs="$cur" ;;
   *)  abs="$target/$cur" ;;
 esac
-default="$gitdir/hooks"
 
-# Self-ref check: same path (string OR realpath-equivalent, in case symlinks).
+# Self-ref check: same path as <gitdir>/hooks OR <commondir>/hooks (string OR
+# realpath-equivalent, in case symlinks).
 self_ref=0
-if [ "$abs" = "$default" ]; then
-  self_ref=1
-else
-  rabs=$(realpath "$abs" 2>/dev/null || echo "")
+rabs=$(realpath "$abs" 2>/dev/null || echo "")
+for default in "$gitdir/hooks" "$commondir/hooks"; do
+  if [ "$abs" = "$default" ]; then
+    self_ref=1; break
+  fi
   rdef=$(realpath "$default" 2>/dev/null || echo "")
-  [ -n "$rabs" ] && [ "$rabs" = "$rdef" ] && self_ref=1
-fi
+  if [ -n "$rabs" ] && [ "$rabs" = "$rdef" ]; then
+    self_ref=1; break
+  fi
+done
 
 if [ "$self_ref" = 1 ]; then
   git -C "$target" config --local --unset core.hooksPath 2>/dev/null \
