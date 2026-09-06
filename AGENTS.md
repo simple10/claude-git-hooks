@@ -63,6 +63,7 @@ rm -rf ~/.config/claude-git-hooks                  # optional: delete the clone
 - **macOS BSD compatibility matters.** Tested on macOS first, Linux second. Two pitfalls already encountered:
   - Multi-char field separators in `awk` are **regexes** — `" | "` is interpreted as "space OR pipe OR space". Use `-F'\t'` with `%x09` in `git log --format`.
   - `&` in `sed` replacement strings is the matched pattern. Escape with `\&` when you mean a literal `&`.
+  - `awk -v var=value` **processes escape sequences** in `value` (POSIX behaviour, gawk and mawk alike). A user regex like `myorg\.com` arrives as `myorg.com` (any char), and gawk prints a warning on every commit. Never pass user-supplied patterns with `-v`; read them from `ENVIRON[...]` instead, as `hooks/pre-commit` does.
 - **Hooks must read STORED config, not propagated overrides.** Both hooks include a `git_config_stored()` helper that unsets every `GIT_CONFIG_*` env var in a subshell before reading. Without it, `git -c user.email=X commit` propagates the override to the hook's own `git config --get user.email` call — comparing override-vs-override always matches, and the leak slips through silently. Don't simplify this back to a plain `git config --get`.
 - **Hooks chain to per-repo `.git/hooks/<name>` if executable.** Don't break the chain — `exec` only after all global checks pass, and guard against recursing into the global itself.
 - **No Claude commit attribution.** Don't add `Generated with Claude Code` or `Co-Authored-By: Claude` trailers.
@@ -82,6 +83,6 @@ changing either hook, run through (at minimum):
 1. Normal commit (matching identity) → PASS
 2. `git -c user.email=X commit` → REFUSE (this is the bug-prone case — see `git_config_stored` above)
 3. `GIT_AUTHOR_EMAIL=X git commit` → REFUSE
-4. `hooks.bannedEmailsRegex` matching a staged ADDED line → REFUSE
+4. `hooks.bannedEmailsRegex` matching a staged ADDED line → REFUSE. Use a pattern containing `\.`: it must refuse `x@myorg.com`, must NOT match `x@myorgXcom`, and must print no awk warning on stderr.
 5. Pre-existing banned content in unmodified file region → PASS (don't false-positive)
 6. Push range with contributor commits (different author.name) → contributors PASS; your-name + wrong-email REFUSE
