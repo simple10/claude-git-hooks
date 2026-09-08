@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Global pre-push: name-gated email check.
-# For each commit in the push range, if author.name == git config user.name,
-# then author.email MUST == git config user.email; likewise for committer
-# name/email. Otherwise skip (it's a contributor commit, not yours).
-# Catches leaks from other machines / cherry-picks / --no-verify commits
-# that bypassed pre-commit, without false-positiving on legitimate merged
-# contributor commits.
+# For each commit this push would ADD to the remote, if author.name == git
+# config user.name, then author.email MUST == git config user.email, unless
+# that email is a noreply address (a different account sharing the name is
+# not a leak); likewise for committer name/email. Otherwise skip (it's a
+# contributor commit, not yours). Catches a real address escaping from
+# other machines / cherry-picks / --no-verify commits that bypassed
+# pre-commit, without false-positiving on merged contributor commits or on
+# commits a remote already holds.
 set -euo pipefail
 
 # Read stored git config, bypassing -c / GIT_CONFIG_* propagation. Defends
@@ -33,23 +35,24 @@ fi
 violations=0
 while read -r local_ref local_sha remote_ref remote_sha; do
   [ "$local_sha" = "0000000000000000000000000000000000000000" ] && continue
-  if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
-    # New branch on remote — bound the scan by other remote refs. If none
-    # exist (fresh remote), this scans the full reachable history; that's
-    # intentionally cautious (false positives noisy, missing a leak isn't).
-    range_args=("$local_sha" "--not" "--remotes")
-  else
-    range_args=("${remote_sha}..${local_sha}")
-  fi
+  # Only what this push would add: everything reachable from any remote ref
+  # is already out there and cannot be a leak from here. Merging main into a
+  # branch used to re-examine main's own commits under remote..local. If no
+  # remote refs exist (fresh remote) this scans the full reachable history;
+  # that's intentionally cautious (false positives noisy, missing a leak
+  # isn't).
+  range_args=("$local_sha" "--not" "--remotes")
   # TAB-delimited output. Tab can't appear in hash/name/email/subject, so
   # awk -F'\t' parses unambiguously. (Avoid multi-char FS like " | " — awk
   # treats it as a REGEX, so `|` becomes alternation and splits go wrong.)
   bad="$(git log "${range_args[@]}" --format='%h%x09%an%x09%ae%x09%cn%x09%ce%x09%s' 2>/dev/null \
     | awk -F'\t' -v name="$configured_name" -v email="$configured_email" '
         # name match acts as "this commit is CLAIMING to be you" — then
-        # the email had better also match. Checked for author ($2/$3) and
-        # committer ($4/$5) independently.
-        ($2 == name && $3 != email) || ($4 == name && $5 != email) {
+        # the email had better also match, or be a noreply address (another
+        # account with the same display name, not an escaped real address).
+        # Checked for author ($2/$3) and committer ($4/$5) independently.
+        function leak(n, e) { return n == name && e != email && e !~ /noreply/ }
+        leak($2, $3) || leak($4, $5) {
           printf "    %s  author=%s <%s>  committer=%s <%s>  %s\n", $1, $2, $3, $4, $5, $6
         }')"
   if [ -n "$bad" ]; then
